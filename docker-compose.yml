@@ -1,0 +1,18 @@
+services:
+  monitor:
+    build: .
+    container_name: network-monitor
+    ports:
+      - "5000:5000"
+    # NET_RAW lets the container send ICMP echo requests (it is on by default
+    # in Docker, but declaring it keeps ping working on locked-down hosts).
+    cap_add:
+      - NET_RAW
+    environment:
+      CHECK_INTERVAL: "5"     # seconds between probe rounds
+      CHECK_TIMEOUT: "2"      # per-probe timeout in seconds
+      HISTORY_LEN: "40"       # samples kept for each sparkline
+      DEGRADED_MS: "250"      # RTT above this is shown as "Slow"
+      # Replace the built-in targets with your own (JSON, one line):
+      # MONITOR_TARGETS: '[{"name":"College Gateway","host":"192.168.1.1","type":"icmp"},{"name":"Web Server","host":"example.com","type":"tcp","port":443}]'
+    restart: unless-stopped

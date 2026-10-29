@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Network Monitor</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { fontFamily: { sans: ['Sora', 'ui-sans-serif', 'system-ui', 'sans-serif'] } } }
+    };
+  </script>
+
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      background: #080b17;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Soft colour fields behind the glass */
+    .aurora { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+    .aurora::before, .aurora::after {
+      content: ""; position: absolute; border-radius: 9999px; filter: blur(110px); opacity: .5;
+    }
+    .aurora::before { width: 46rem; height: 46rem; top: -16rem; left: -10rem; background: #2dd4bf33; }
+    .aurora::after  { width: 42rem; height: 42rem; bottom: -14rem; right: -8rem; background: #7c5cff40; }
+
+    .glass {
+      background: linear-gradient(145deg, rgba(255,255,255,.075), rgba(255,255,255,.025));
+      border: 1px solid rgba(255,255,255,.10);
+      box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 20px 50px -24px rgba(0,0,0,.7);
+      -webkit-backdrop-filter: blur(18px) saturate(140%);
+      backdrop-filter: blur(18px) saturate(140%);
+    }
+
+    /* The one moving thing: a pulse on the live dot */
+    @keyframes pulse-ring { 0% { transform: scale(.8); opacity: .9 } 100% { transform: scale(2.4); opacity: 0 } }
+    .live-dot::after {
+      content: ""; position: absolute; inset: 0; border-radius: 9999px; background: inherit;
+      animation: pulse-ring 1.8s ease-out infinite;
+    }
+    @media (prefers-reduced-motion: reduce) { .live-dot::after { animation: none; } }
+
+    .ring-progress { transition: stroke-dashoffset .12s linear; }
+  </style>
+</head>
+
+<body class="font-sans text-slate-200 min-h-screen antialiased">
+  <div class="aurora" aria-hidden="true"></div>
+
+  <main class="mx-auto max-w-6xl px-4 sm:px-6 py-8 sm:py-12">
+
+    <!-- Header -->
+    <header class="flex flex-wrap items-center justify-between gap-4 mb-6">
+      <div>
+        <h1 class="text-xl sm:text-2xl font-semibold tracking-tight text-white">Network monitor</h1>
+        <p class="text-sm text-slate-400 mt-1">ICMP and TCP availability, probed from this server</p>
+      </div>
+      <button id="refresh-now" type="button"
+        class="glass rounded-xl px-4 py-2 text-sm text-slate-200 hover:bg-white/10 transition
+               focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-300">
+        Refresh now
+      </button>
+    </header>
+
+    <!-- Connection problem banner -->
+    <div id="banner" role="alert" hidden
+      class="mb-6 rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+      Can’t reach the monitor API. Showing the last known data and retrying every 5 seconds.
+    </div>
+
+    <!-- Overall status -->
+    <section class="glass rounded-3xl p-6 sm:p-8 mb-8 flex flex-wrap items-center justify-between gap-8"
+             aria-labelledby="headline">
+      <div class="min-w-0">
+        <div class="flex items-center gap-3 mb-4">
+          <span id="live-dot" class="live-dot relative inline-block h-2.5 w-2.5 rounded-full bg-slate-500"></span>
+          <span id="updated" class="text-sm text-slate-400">Waiting for first check…</span>
+        </div>
+        <h2 id="headline" aria-live="polite"
+            class="text-3xl sm:text-5xl font-bold tracking-tight text-white leading-[1.1] max-w-[18ch]">
+          Running first checks
+        </h2>
+        <dl class="mt-6 flex flex-wrap gap-x-10 gap-y-3 text-sm">
+          <div><dt class="text-slate-400">Average latency</dt>
+               <dd id="s-latency" class="text-lg font-semibold text-white">—</dd></div>
+          <div><dt class="text-slate-400">Average uptime</dt>
+               <dd id="s-uptime" class="text-lg font-semibold text-white">—</dd></div>
+          <div><dt class="text-slate-400">Targets up</dt>
+               <dd id="s-up" class="text-lg font-semibold text-white">—</dd></div>
+        </dl>
+      </div>
+
+      <!-- Countdown ring to the next refresh -->
+      <div class="relative h-28 w-28 shrink-0" aria-hidden="true">
+        <svg viewBox="0 0 100 100" class="h-full w-full -rotate-90">
+          <circle cx="50" cy="50" r="44" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="5"/>
+          <circle id="ring" cx="50" cy="50" r="44" fill="none" stroke="#5eead4" stroke-width="5"
+                  stroke-linecap="round" stroke-dasharray="276.46" stroke-dashoffset="276.46"
+                  class="ring-progress"/>
+        </svg>
+        <div class="absolute inset-0 flex flex-col items-center justify-center">
+          <span id="countdown" class="text-2xl font-semibold text-white">5</span>
+          <span class="text-xs text-slate-400">seconds</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Targets -->
+    <section id="grid" class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3" aria-label="Monitored targets">
+      <p class="text-slate-400 text-sm">Loading targets…</p>
+    </section>
+
+    <footer class="mt-10 text-xs text-slate-500">
+      Raw telemetry is available at <a href="/api/status" class="underline underline-offset-2 hover:text-slate-300">/api/status</a>.
+    </footer>
+  </main>
+
+  <script>
+    const REFRESH_MS = 5000;
+    const FETCH_TIMEOUT_MS = 4000;
+    const RING_LEN = 276.46;
+
+    const STATUS = {
+      up:       { label: 'Up',       text: 'text-emerald-300', pill: 'bg-emerald-400/15 text-emerald-300 ring-emerald-400/30', dot: 'bg-emerald-400', hex: '#34d399' },
+      degraded: { label: 'Slow',     text: 'text-amber-300',   pill: 'bg-amber-400/15 text-amber-300 ring-amber-400/30',       dot: 'bg-amber-400',   hex: '#fbbf24' },
+      down:     { label: 'Down',     text: 'text-rose-300',    pill: 'bg-rose-400/15 text-rose-300 ring-rose-400/30',          dot: 'bg-rose-400',    hex: '#fb7185' },
+      pending:  { label: 'Checking', text: 'text-slate-300',   pill: 'bg-slate-400/15 text-slate-300 ring-slate-400/30',       dot: 'bg-slate-400',   hex: '#94a3b8' },
+    };
+
+    const $ = (id) => document.getElementById(id);
+    let nextRefreshAt = Date.now() + REFRESH_MS;
+    let timer = null;
+    let inFlight = false;
+
+    function esc(value) {
+      const d = document.createElement('div');
+      d.textContent = value == null ? '' : String(value);
+      return d.innerHTML;
+    }
+    const ms = (v) => (v == null ? '—' : v.toFixed(v < 10 ? 1 : 0));
+
+    /* Latency sparkline: area + line, red ticks where a probe failed */
+    function sparkline(history, status, uid) {
+      const W = 260, H = 56, PAD = 4;
+      const s = STATUS[status] || STATUS.pending;
+      if (history.length < 2) {
+        return `<div class="h-14 flex items-center text-xs text-slate-500">Collecting samples…</div>`;
+      }
+      const vals = history.filter((v) => v != null);
+      const max = Math.max(...vals, 1) * 1.15;
+      const step = (W - PAD * 2) / (history.length - 1);
+      const x = (i) => PAD + i * step;
+      const y = (v) => H - PAD - (v / max) * (H - PAD * 2);
+
+      let segments = [], current = [];
+      history.forEach((v, i) => {
+        if (v == null) { if (current.length) segments.push(current); current = []; }
+        else current.push([x(i), y(v)]);
+      });
+      if (current.length) segments.push(current);
+
+      const line = segments.map((seg) =>
+        seg.length === 1
+          ? `<circle cx="${seg[0][0]}" cy="${seg[0][1]}" r="2" fill="${s.hex}"/>`
+          : `<path d="M${seg.map((p) => p.join(',')).join(' L')}" fill="none" stroke="${s.hex}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>`
+      ).join('');
+      const area = segments.filter((seg) => seg.length > 1).map((seg) =>
+        `<path d="M${seg.map((p) => p.join(',')).join(' L')} L${seg[seg.length - 1][0]},${H - PAD} L${seg[0][0]},${H - PAD} Z" fill="url(#g-${uid})"/>`
+      ).join('');
+      const fails = history.map((v, i) => v == null
+        ? `<rect x="${x(i) - 1.5}" y="${H - PAD - 10}" width="3" height="10" rx="1.5" fill="#fb7185"/>` : '').join('');
+
+      return `
+        <svg viewBox="0 0 ${W} ${H}" class="w-full h-14" role="img"
+             aria-label="Latency over the last ${history.length} checks">
+          <defs>
+            <linearGradient id="g-${uid}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="${s.hex}" stop-opacity=".35"/>
+              <stop offset="1" stop-color="${s.hex}" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          ${area}${line}${fails}
+        </svg>`;
+    }
+
+    function card(t, i) {
+      const s = STATUS[t.status] || STATUS.pending;
+      const proto = t.type === 'icmp' ? 'ICMP ping' : `TCP port ${t.port}`;
+      const uptime = t.uptime_pct == null ? '—' : `${t.uptime_pct.toFixed(1)}%`;
+      const barW = t.uptime_pct == null ? 0 : t.uptime_pct;
+      const last = t.last_checked ? new Date(t.last_checked).toLocaleTimeString() : '—';
+      const note = t.status === 'down' && t.error
+        ? `<p class="mt-3 text-xs text-rose-300/90">${esc(t.error)}</p>`
+        : `<p class="mt-3 text-xs text-slate-500">Checked at ${esc(last)}</p>`;
+
+      return `
+        <article class="glass rounded-2xl p-5 flex flex-col">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <h3 class="font-semibold text-white truncate">${esc(t.name)}</h3>
+              <p class="text-xs text-slate-400 mt-0.5 truncate">${esc(t.host)} &middot; ${esc(proto)}</p>
+            </div>
+            <span class="shrink-0 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${s.pill}">
+              <span class="h-1.5 w-1.5 rounded-full ${s.dot}"></span>${s.label}
+            </span>
+          </div>
+
+          <div class="mt-5 flex items-baseline gap-1.5">
+            <span class="text-4xl font-bold tracking-tight ${t.status === 'down' ? 'text-slate-500' : 'text-white'}">${ms(t.rtt_ms)}</span>
+            <span class="text-sm text-slate-400">ms</span>
+          </div>
+
+          <div class="mt-2">${sparkline(t.history || [], t.status, i)}</div>
+
+          <div class="mt-4">
+            <div class="flex items-center justify-between text-xs mb-1.5">
+              <span class="text-slate-400">Uptime</span>
+              <span class="font-medium ${s.text}">${uptime}</span>
+            </div>
+            <div class="h-1.5 rounded-full bg-white/10 overflow-hidden">
+              <div class="h-full rounded-full" style="width:${barW}%;background:${s.hex}"></div>
+            </div>
+          </div>
+
+          <dl class="mt-4 grid grid-cols-3 gap-2 text-xs">
+            <div><dt class="text-slate-500">Min</dt><dd class="text-slate-200">${ms(t.min_rtt_ms)} ms</dd></div>
+            <div><dt class="text-slate-500">Avg</dt><dd class="text-slate-200">${ms(t.avg_rtt_ms)} ms</dd></div>
+            <div><dt class="text-slate-500">Max</dt><dd class="text-slate-200">${ms(t.max_rtt_ms)} ms</dd></div>
+          </dl>
+          ${note}
+        </article>`;
+    }
+
+    function headline(sum) {
+      if (sum.pending === sum.total) return { text: 'Running first checks', tone: 'pending' };
+      if (sum.down > 0) {
+        return { text: `${sum.down} of ${sum.total} targets ${sum.down === 1 ? 'is' : 'are'} down`, tone: 'down' };
+      }
+      if (sum.degraded > 0) {
+        return { text: `${sum.degraded} ${sum.degraded === 1 ? 'target is' : 'targets are'} responding slowly`, tone: 'degraded' };
+      }
+      return { text: `All ${sum.total} targets are reachable`, tone: 'up' };
+    }
+
+    function render(data) {
+      const sum = data.summary;
+      const h = headline(sum);
+      $('headline').textContent = h.text;
+      $('live-dot').className = `live-dot relative inline-block h-2.5 w-2.5 rounded-full ${STATUS[h.tone].dot}`;
+      $('updated').textContent = `Updated ${new Date(data.generated_at).toLocaleTimeString()}`;
+      $('s-latency').textContent = sum.avg_rtt_ms == null ? '—' : `${sum.avg_rtt_ms.toFixed(1)} ms`;
+      $('s-uptime').textContent = sum.avg_uptime_pct == null ? '—' : `${sum.avg_uptime_pct.toFixed(1)}%`;
+      $('s-up').textContent = `${sum.up + sum.degraded} of ${sum.total}`;
+      $('grid').innerHTML = data.targets.map(card).join('') || '<p class="text-slate-400 text-sm">No targets configured.</p>';
+    }
+
+    async function load() {
+      if (inFlight) return;
+      inFlight = true;
+      const ctrl = new AbortController();
+      const abort = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+      try {
+        const res = await fetch('/api/status', { cache: 'no-store', signal: ctrl.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        render(await res.json());
+        $('banner').hidden = true;
+      } catch (err) {
+        console.warn('Telemetry fetch failed:', err);
+        $('banner').hidden = false;
+        $('live-dot').className = 'live-dot relative inline-block h-2.5 w-2.5 rounded-full bg-rose-400';
+      } finally {
+        clearTimeout(abort);
+        inFlight = false;
+        schedule();
+      }
+    }
+
+    function schedule() {
+      clearTimeout(timer);
+      nextRefreshAt = Date.now() + REFRESH_MS;
+      timer = setTimeout(load, REFRESH_MS);
+    }
+
+    // Countdown ring, purely visual
+    setInterval(() => {
+      const left = Math.max(0, nextRefreshAt - Date.now());
+      $('countdown').textContent = Math.ceil(left / 1000);
+      $('ring').style.strokeDashoffset = RING_LEN * (left / REFRESH_MS);
+    }, 100);
+
+    $('refresh-now').addEventListener('click', () => { clearTimeout(timer); load(); });
+
+    load();
+  </script>
+</body>
+</html>
