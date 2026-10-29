@@ -71,7 +71,7 @@ cd network-monitor
 docker compose up --build
 ```
 
-Then open **http://localhost:5000**.
+Then open [http://127.0.0.1:5000](http://127.0.0.1:5000)
 
 > The server logs show `0.0.0.0:5000`, but that is only the address it listens on. Always browse to `localhost` or `127.0.0.1`.
 
@@ -97,7 +97,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Then open [http://localhost:5000](http://127.0.0.1:5000).
+Then open [http://127.0.0.1:5000](http://127.0.0.1:5000).
 
 ## Configuration
 
